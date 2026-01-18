@@ -1,0 +1,14 @@
+# Origin
+WhyConID/
+
+# Common
+.history
+.vscode
+
+# python venv & cache
+__pycache__/
+.venv/
+env/
+
+# docs
+docs/
