@@ -10,5 +10,12 @@ __pycache__/
 .venv/
 env/
 
+# output
+output/
+
 # docs
-docs/
+docs/hide
+
+# temporary folder
+api/
+web/
