@@ -108,4 +108,4 @@ python server.py --mode full
 
 ---
 
-![Stars](https://www.star-history.com/#TiiJeiJ8/WhyConID-py&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=TiiJeiJ8/WhyConID-py&type=Date)](https://star-history.com/#TiiJeiJ8/WhyConID-py&Date)
