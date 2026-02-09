@@ -4,6 +4,7 @@
 
 * 问题: 标记在快速运动或被部分遮挡时丢失检测。
 * 建议: 增加运动感知预处理（运动补偿、时域平滑），并在检测后用轨迹回溯重连 ID（已实现短期记忆但需调参）。
+  可看看Hopfield Network
 
 2. 非均匀光照（半暗半亮场景）
 
@@ -45,7 +46,7 @@
 * 问题: 在部分环境（Windows + Python 3.13 / 无 Rust/C 工具链）下，`pydantic-core`、`pandas` 等包编译失败。
 * 建议: 在 [requirements.txt]() 中标注平台兼容性并提供预构建 wheel 或兼容版本；在 README 中列出系统依赖（Rust、MSVC、适配的 Python 版本）。
 
-1.  前端与部署
+1. 前端与部署
 
 * 问题: 前端静态文件缺失（web/dist），部署文档不完整。
 * 建议: 在 [server.py]() 提供可选的 `--serve-frontend` 并在 README 加入前端构建步骤；提供 Dockerfile 作为可选简化部署路径。
