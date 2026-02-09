@@ -49,7 +49,10 @@ class CircleDetector(BaseDetector):
     """
     
     def __init__(self, width: int, height: int, num_bots: int = 1,
-                    debug: int = 0, motion_mode: bool = False):
+                    debug: int = 0, motion_mode: bool = False,
+                    use_clahe: bool = False, clahe_clip: float = 2.0, clahe_grid: int = 8,
+                    temporal_smooth: bool = False, smooth_frames: int = 3, smooth_weight: float = 0.6,
+                    crop_border: int = 0):
         """
         Initialize circle detector.
         
@@ -59,6 +62,13 @@ class CircleDetector(BaseDetector):
             num_bots: Number of markers to track
             debug: Debug level
             motion_mode: Enable motion-aware detection (search from last position)
+            use_clahe: Enable CLAHE preprocessing
+            clahe_clip: CLAHE clip limit
+            clahe_grid: CLAHE grid size
+            temporal_smooth: Enable temporal smoothing
+            smooth_frames: Number of frames for temporal averaging
+            smooth_weight: Weight for current frame (0-1)
+            crop_border: Pixels to crop from border
         """
         super().__init__(width, height, debug)
         
@@ -74,6 +84,24 @@ class CircleDetector(BaseDetector):
         self.max_threshold = 255
         self.max_failed = 10
         self.num_failed = 0
+        
+        # Preprocessing parameters
+        self.use_clahe = use_clahe
+        self.clahe_clip = clahe_clip
+        self.clahe_grid = clahe_grid
+        self.temporal_smooth = temporal_smooth
+        self.smooth_frames = smooth_frames
+        self.smooth_weight = smooth_weight
+        self.crop_border = crop_border
+        
+        # CLAHE object (created on demand)
+        self.clahe = None
+        if self.use_clahe:
+            self.clahe = cv2.createCLAHE(clipLimit=clahe_clip, 
+                                          tileGridSize=(clahe_grid, clahe_grid))
+        
+        # Frame buffer for temporal smoothing
+        self.frame_buffer: List[np.ndarray] = []
         
         # Tolerance parameters - balanced for accuracy vs recall
         self.circular_tolerance = 0.35  # Allow some distortion
@@ -120,6 +148,20 @@ class CircleDetector(BaseDetector):
         else:
             gray = image.copy()
         
+        # Apply border cropping if enabled
+        if self.crop_border > 0:
+            h, w = gray.shape
+            gray = gray[self.crop_border:h-self.crop_border, 
+                       self.crop_border:w-self.crop_border]
+        
+        # Apply CLAHE if enabled
+        if self.use_clahe and self.clahe is not None:
+            gray = self.clahe.apply(gray)
+        
+        # Apply temporal smoothing if enabled
+        if self.temporal_smooth:
+            gray = self._apply_temporal_smooth(gray)
+        
         # Apply threshold
         binary = self._threshold_image(gray)
         
@@ -131,6 +173,16 @@ class CircleDetector(BaseDetector):
         if self.identify:
             segments = self._identify_segments(segments, gray)
         
+        # Adjust coordinates if border was cropped
+        if self.crop_border > 0:
+            for seg in segments:
+                seg.x += self.crop_border
+                seg.y += self.crop_border
+                seg.minx += self.crop_border
+                seg.maxx += self.crop_border
+                seg.miny += self.crop_border
+                seg.maxy += self.crop_border
+        
         # Save for next frame tracking
         self.last_segments = self.current_segments.copy()
         self.current_segments = segments
@@ -139,6 +191,40 @@ class CircleDetector(BaseDetector):
             print(f"Detected {len(segments)} valid markers")
         
         return segments
+    
+    def _apply_temporal_smooth(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Apply temporal smoothing by averaging recent frames.
+        
+        Args:
+            frame: Current grayscale frame
+            
+        Returns:
+            Smoothed frame
+        """
+        # Add current frame to buffer
+        self.frame_buffer.append(frame.copy())
+        
+        # Keep only recent frames
+        if len(self.frame_buffer) > self.smooth_frames:
+            self.frame_buffer.pop(0)
+        
+        # Not enough frames yet, return current
+        if len(self.frame_buffer) < 2:
+            return frame
+        
+        # Weighted average: current frame gets smooth_weight, others split (1-smooth_weight)
+        current_weight = self.smooth_weight
+        history_weight = (1.0 - current_weight) / (len(self.frame_buffer) - 1)
+        
+        # Start with current frame
+        smoothed = frame.astype(np.float32) * current_weight
+        
+        # Add weighted history
+        for i in range(len(self.frame_buffer) - 1):
+            smoothed += self.frame_buffer[i].astype(np.float32) * history_weight
+        
+        return smoothed.astype(np.uint8)
     
     def _preprocess(self, image: np.ndarray) -> np.ndarray:
         """

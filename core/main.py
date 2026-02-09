@@ -44,6 +44,21 @@ def main():
     parser.add_argument('--prediction-steps', type=int, default=5, help='Number of future steps to predict (default: 5)')
     parser.add_argument('--show-prediction-error', action='store_true', help='Show prediction error (compare predicted vs actual positions)')
     
+    # Tracker tuning parameters
+    parser.add_argument('--match-threshold', type=float, default=200.0, help='Maximum distance for matching markers between frames (default: 200.0)')
+    parser.add_argument('--max-age', type=int, default=90, help='Maximum frames to keep a track without detection (default: 90)')
+    parser.add_argument('--min-hits', type=int, default=8, help='Minimum detections before track is confirmed (default: 8)')
+    parser.add_argument('--memory-frames', type=int, default=500, help='Frames to remember lost tracks for ID recovery (default: 500)')
+    
+    # Detection preprocessing parameters
+    parser.add_argument('--temporal-smooth', action='store_true', help='Enable temporal smoothing (average recent frames)')
+    parser.add_argument('--smooth-frames', type=int, default=3, help='Number of frames for temporal smoothing (default: 3)')
+    parser.add_argument('--smooth-weight', type=float, default=0.6, help='Weight for current frame in smoothing (0-1, default: 0.6)')
+    parser.add_argument('--crop-border', type=int, default=0, help='Crop N pixels from border to remove black edges (default: 0)')
+    parser.add_argument('--use-clahe', action='store_true', help='Enable CLAHE (Contrast Limited Adaptive Histogram Equalization)')
+    parser.add_argument('--clahe-clip', type=float, default=2.0, help='CLAHE clip limit (default: 2.0)')
+    parser.add_argument('--clahe-grid', type=int, default=8, help='CLAHE grid size (default: 8)')
+    
     args = parser.parse_args()
     
     # Create timestamped output directory for this run
@@ -101,10 +116,31 @@ def main():
         height=height,
         num_bots=args.markers,
         debug=args.debug,
-        motion_mode=motion_mode
+        motion_mode=motion_mode,
+        use_clahe=args.use_clahe,
+        clahe_clip=args.clahe_clip,
+        clahe_grid=args.clahe_grid,
+        temporal_smooth=args.temporal_smooth,
+        smooth_frames=args.smooth_frames,
+        smooth_weight=args.smooth_weight,
+        crop_border=args.crop_border
     )
+    
+    # Log preprocessing settings
+    preproc_info = []
+    if args.crop_border > 0:
+        preproc_info.append(f"crop={args.crop_border}px")
+    if args.use_clahe:
+        preproc_info.append(f"CLAHE(clip={args.clahe_clip}, grid={args.clahe_grid})")
+    if args.temporal_smooth:
+        preproc_info.append(f"temporal_smooth(frames={args.smooth_frames}, weight={args.smooth_weight})")
     if motion_mode:
-        logger.info("Motion-aware detection enabled for video processing")
+        preproc_info.append("motion_mode")
+    
+    if preproc_info:
+        logger.info(f"Preprocessing enabled: {', '.join(preproc_info)}")
+    else:
+        logger.info("Standard detection mode (no preprocessing)")
     
     # Initialize necklace decoder
     necklace = CNecklace(bits=config.marker.necklace_bits)
@@ -126,17 +162,17 @@ def main():
         traj_length = None if args.persistent_trajectory else 50
         
         tracker = MarkerTracker(
-            max_distance=150.0,  # Increased for fast-moving markers
-            max_age=90,          # Keep tracks longer to avoid fragmentation
-            min_hits=8,          # More hits required to confirm track (reduce noise)
+            max_distance=args.match_threshold,
+            max_age=args.max_age,
+            min_hits=args.min_hits,
             trajectory_length=traj_length,
-            memory_frames=300    # Remember lost tracks for 10 seconds at 30fps
+            memory_frames=args.memory_frames
         )
-        mode_info = "Trajectory tracking enabled"
+        mode_info = f"Trajectory tracking enabled (match≤{args.match_threshold}px, age≤{args.max_age}, hits≥{args.min_hits}, memory={args.memory_frames}f)"
         if args.persistent_trajectory:
-            mode_info += " (persistent mode)"
+            mode_info += " [persistent]"
         if args.color_trajectory:
-            mode_info += " (colored trajectories)"
+            mode_info += " [colored]"
         logger.info(mode_info)
     
     # Output video writer (optional)
