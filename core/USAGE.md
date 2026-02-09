@@ -92,7 +92,7 @@ python main.py 0 --show
   python main.py input.jpg --config custom_config.yaml
   ```
 
-#### 轨迹追踪选项 (新功能)
+#### 轨迹追踪选项
 
 - `--track`: 启用轨迹追踪和预测
 
@@ -114,6 +114,73 @@ python main.py 0 --show
   - 便于区分多个目标
   - 颜色自动从预定义调色板选择
 
+#### 轨迹预测选项
+
+- `--show-prediction`: 显示轨迹预测
+  - 方案A：单步箭头（当前位置→下一步预测）
+  - 方案B：多步虚线轨迹（半透明彩色路径）
+- `--prediction-steps <N>`: 预测未来N步（默认：5）
+  ```bash
+  python main.py video.mp4 --track --show-prediction --prediction-steps 10
+  ```
+- `--show-prediction-error`: 显示预测误差
+  - 红色X标记上一帧的预测位置
+  - 绿色线连接预测与实际位置
+  - 显示像素误差距离
+
+#### 跟踪器调参选项 🔧
+
+- `--match-threshold <距离>`: 匹配距离阈值（默认：200.0像素）
+  - 两帧间标记中心距离超过此值视为不同目标
+  - 快速运动场景建议增大（300-500）
+  - 密集场景建议减小（50-150）
+  
+- `--max-age <帧数>`: 丢失后保留帧数（默认：90帧）
+  - 标记消失后继续保留ID的最大帧数
+  - 遮挡频繁场景建议增大（120-300）
+  - 实时性要求高可减小（30-60）
+  
+- `--min-hits <次数>`: 确认跟踪的最小命中数（默认：8次）
+  - 新目标需连续检测多少次才确认为有效轨迹
+  - 噪声多时增大（10-15）减少误跟踪
+  - 快速响应场景减小（3-5）
+  
+- `--memory-frames <帧数>`: ID恢复记忆帧数（默认：500帧）
+  - 记住已丢失轨迹的时长，用于ID重识别
+  - 长时间遮挡场景增大（1000-3000）
+  - 短暂检测场景减小（100-300）
+
+#### 检测预处理选项 🖼️
+
+- `--temporal-smooth`: 启用时域平滑
+  - 对最近N帧做加权平均，减少运动模糊和噪声
+  - 适合快速运动或低光场景
+  
+- `--smooth-frames <N>`: 平滑帧数（默认：3）
+  - 参与时域平滑的历史帧数量
+  - 建议范围：2-5（过大会导致拖尾）
+  
+- `--smooth-weight <权重>`: 当前帧权重（默认：0.6）
+  - 当前帧在平滑中的权重（0-1之间）
+  - 0.6表示当前帧60%，历史帧40%
+  - 需要更强平滑时降低（0.4-0.5）
+  
+- `--crop-border <像素>`: 裁剪黑边像素（默认：0）
+  - 从四边各裁剪N像素，消除视频黑边干扰
+  - 根据实际黑边宽度设置（如10, 20, 50）
+  
+- `--use-clahe`: 启用CLAHE对比度增强
+  - 自适应直方图均衡，改善非均匀光照
+  - 适合半暗半亮场景
+  
+- `--clahe-clip <限幅>`: CLAHE限幅值（默认：2.0）
+  - 控制对比度增强强度
+  - 过高会放大噪声（建议1.0-4.0）
+  
+- `--clahe-grid <网格>`: CLAHE网格大小（默认：8）
+  - 自适应分块的网格尺寸（NxN）
+  - 小网格（4-8）适合细节，大网格（16-32）适合大范围光照变化
+
 **轨迹追踪示例：**
 
 ```bash
@@ -126,8 +193,40 @@ python main.py video.mp4 --track --save-trajectory --markers 3
 # 持久化彩色轨迹 + 视频导出
 python main.py video.mp4 --track --persistent-trajectory --color-trajectory --output tracked.mp4
 
+# 带预测可视化
+python main.py video.mp4 --track --show-prediction --prediction-steps 10 --color-trajectory --output predicted.mp4
+
+# 预测误差分析
+python main.py video.mp4 --track --show-prediction --show-prediction-error --persistent-trajectory --output error_analysis.mp4
+
 # 完整功能演示
-python main.py video.mp4 --track --save-trajectory --persistent-trajectory --color-trajectory --output result.mp4 --markers 5
+python main.py video.mp4 --track --save-trajectory --persistent-trajectory --color-trajectory --show-prediction --prediction-steps 10 --output result.mp4 --markers 5
+```
+
+**调参优化示例：**
+
+```bash
+# 快速运动场景（放宽匹配、延长记忆）
+python main.py fast_motion.mp4 --track --match-threshold 300 --max-age 120 --memory-frames 1000 --output fast.mp4
+
+# 密集场景（严格匹配、快速确认）
+python main.py dense.mp4 --track --match-threshold 80 --min-hits 5 --max-age 60 --markers 10 --output dense.mp4
+
+# 低光/噪声场景（时域平滑 + CLAHE）
+python main.py lowlight.mp4 --track --temporal-smooth --smooth-frames 5 --smooth-weight 0.5 --use-clahe --clahe-clip 3.0 --output enhanced.mp4
+
+# 黑边视频处理
+python main.py border_video.mp4 --track --crop-border 50 --use-clahe --output cropped.mp4
+
+# 半暗半亮场景（CLAHE + 调参）
+python main.py mixed_light.mp4 --track --use-clahe --clahe-grid 8 --match-threshold 150 --memory-frames 300 --output mixed.mp4
+
+# 综合优化（时域 + CLAHE + 调参）
+python main.py challenge.mp4 --track --temporal-smooth --smooth-frames 3 --smooth-weight 0.6 \
+  --use-clahe --clahe-clip 2.5 --crop-border 20 \
+  --match-threshold 200 --max-age 90 --min-hits 6 --memory-frames 500 \
+  --persistent-trajectory --color-trajectory --show-prediction --prediction-steps 8 \
+  --output optimized.mp4 --debug 1
 ```
 
 ## 使用示例
