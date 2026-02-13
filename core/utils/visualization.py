@@ -61,7 +61,8 @@ class DetectionVisualizer:
                         predictions: Optional[Dict] = None,
                         show_prediction: bool = False,
                         previous_predictions: Optional[Dict] = None,
-                        show_prediction_error: bool = False) -> np.ndarray:
+                        show_prediction_error: bool = False,
+                        lost_status: Optional[Dict[int, bool]] = None) -> np.ndarray:
         """
         Draw detection results on image.
         
@@ -78,6 +79,7 @@ class DetectionVisualizer:
             show_prediction: Whether to show predictions
             previous_predictions: Dict of track_id -> list of previously predicted positions
             show_prediction_error: Whether to show prediction error visualization
+            lost_status: Dict mapping track_id to is_lost (True if lost, False if tracking)
             
         Returns:
             Annotated image
@@ -105,14 +107,28 @@ class DetectionVisualizer:
                     )
                     
                     # Draw trajectory points
+                    # Check if this track is lost
+                    is_lost = lost_status.get(track_id, False) if lost_status else False
+                    
                     for point in trajectory[-10:]:  # Last 10 points
-                        cv2.circle(
-                            annotated,
-                            (int(point[0]), int(point[1])),
-                            2,
-                            color,
-                            -1
-                        )
+                        if is_lost:
+                            # Draw hollow circle for lost tracks
+                            cv2.circle(
+                                annotated,
+                                (int(point[0]), int(point[1])),
+                                3,
+                                color,
+                                1  # Hollow
+                            )
+                        else:
+                            # Draw filled circle for active tracks
+                            cv2.circle(
+                                annotated,
+                                (int(point[0]), int(point[1])),
+                                2,
+                                color,
+                                -1
+                            )
         
         # Draw predictions (after trajectories, before markers)
         if show_prediction and predictions and trajectories:
@@ -284,13 +300,30 @@ class DetectionVisualizer:
             
             # Draw center point
             if show_center:
-                cv2.circle(
-                    annotated,
-                    (int(seg.x), int(seg.y)),
-                    6,
-                    self.color_center,
-                    -1
-                )
+                # Check if this segment belongs to a lost track
+                is_lost = False
+                if track_ids and i in track_ids and lost_status:
+                    track_id = track_ids[i]
+                    is_lost = lost_status.get(track_id, False)
+                
+                if is_lost:
+                    # Draw hollow circle for lost track
+                    cv2.circle(
+                        annotated,
+                        (int(seg.x), int(seg.y)),
+                        8,
+                        self.color_center,
+                        2  # Hollow
+                    )
+                else:
+                    # Draw filled circle for active track
+                    cv2.circle(
+                        annotated,
+                        (int(seg.x), int(seg.y)),
+                        6,
+                        self.color_center,
+                        -1
+                    )
                 # Draw a small cross
                 cv2.drawMarker(
                     annotated,

@@ -150,37 +150,6 @@ python main.py 0 --show
   - 长时间遮挡场景增大（1000-3000）
   - 短暂检测场景减小（100-300）
 
-#### 检测预处理选项 🖼️
-
-- `--temporal-smooth`: 启用时域平滑
-  - 对最近N帧做加权平均，减少运动模糊和噪声
-  - 适合快速运动或低光场景
-  
-- `--smooth-frames <N>`: 平滑帧数（默认：3）
-  - 参与时域平滑的历史帧数量
-  - 建议范围：2-5（过大会导致拖尾）
-  
-- `--smooth-weight <权重>`: 当前帧权重（默认：0.6）
-  - 当前帧在平滑中的权重（0-1之间）
-  - 0.6表示当前帧60%，历史帧40%
-  - 需要更强平滑时降低（0.4-0.5）
-  
-- `--crop-border <像素>`: 裁剪黑边像素（默认：0）
-  - 从四边各裁剪N像素，消除视频黑边干扰
-  - 根据实际黑边宽度设置（如10, 20, 50）
-  
-- `--use-clahe`: 启用CLAHE对比度增强
-  - 自适应直方图均衡，改善非均匀光照
-  - 适合半暗半亮场景
-  
-- `--clahe-clip <限幅>`: CLAHE限幅值（默认：2.0）
-  - 控制对比度增强强度
-  - 过高会放大噪声（建议1.0-4.0）
-  
-- `--clahe-grid <网格>`: CLAHE网格大小（默认：8）
-  - 自适应分块的网格尺寸（NxN）
-  - 小网格（4-8）适合细节，大网格（16-32）适合大范围光照变化
-
 **轨迹追踪示例：**
 
 ```bash
@@ -211,22 +180,6 @@ python main.py fast_motion.mp4 --track --match-threshold 300 --max-age 120 --mem
 
 # 密集场景（严格匹配、快速确认）
 python main.py dense.mp4 --track --match-threshold 80 --min-hits 5 --max-age 60 --markers 10 --output dense.mp4
-
-# 低光/噪声场景（时域平滑 + CLAHE）
-python main.py lowlight.mp4 --track --temporal-smooth --smooth-frames 5 --smooth-weight 0.5 --use-clahe --clahe-clip 3.0 --output enhanced.mp4
-
-# 黑边视频处理
-python main.py border_video.mp4 --track --crop-border 50 --use-clahe --output cropped.mp4
-
-# 半暗半亮场景（CLAHE + 调参）
-python main.py mixed_light.mp4 --track --use-clahe --clahe-grid 8 --match-threshold 150 --memory-frames 300 --output mixed.mp4
-
-# 综合优化（时域 + CLAHE + 调参）
-python main.py challenge.mp4 --track --temporal-smooth --smooth-frames 3 --smooth-weight 0.6 \
-  --use-clahe --clahe-clip 2.5 --crop-border 20 \
-  --match-threshold 200 --max-age 90 --min-hits 6 --memory-frames 500 \
-  --persistent-trajectory --color-trajectory --show-prediction --prediction-steps 8 \
-  --output optimized.mp4 --debug 1
 ```
 
 ## 使用示例

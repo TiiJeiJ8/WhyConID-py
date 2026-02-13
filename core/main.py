@@ -45,19 +45,10 @@ def main():
     parser.add_argument('--show-prediction-error', action='store_true', help='Show prediction error (compare predicted vs actual positions)')
     
     # Tracker tuning parameters
-    parser.add_argument('--match-threshold', type=float, default=200.0, help='Maximum distance for matching markers between frames (default: 200.0)')
-    parser.add_argument('--max-age', type=int, default=90, help='Maximum frames to keep a track without detection (default: 90)')
+    parser.add_argument('--match-threshold', type=float, default=350.0, help='Maximum distance for matching markers between frames (default: 350.0)')
+    parser.add_argument('--max-age', type=int, default=300, help='Maximum frames to keep a track without detection (default: 300)')
     parser.add_argument('--min-hits', type=int, default=8, help='Minimum detections before track is confirmed (default: 8)')
     parser.add_argument('--memory-frames', type=int, default=500, help='Frames to remember lost tracks for ID recovery (default: 500)')
-    
-    # Detection preprocessing parameters
-    parser.add_argument('--temporal-smooth', action='store_true', help='Enable temporal smoothing (average recent frames)')
-    parser.add_argument('--smooth-frames', type=int, default=3, help='Number of frames for temporal smoothing (default: 3)')
-    parser.add_argument('--smooth-weight', type=float, default=0.6, help='Weight for current frame in smoothing (0-1, default: 0.6)')
-    parser.add_argument('--crop-border', type=int, default=0, help='Crop N pixels from border to remove black edges (default: 0)')
-    parser.add_argument('--use-clahe', action='store_true', help='Enable CLAHE (Contrast Limited Adaptive Histogram Equalization)')
-    parser.add_argument('--clahe-clip', type=float, default=2.0, help='CLAHE clip limit (default: 2.0)')
-    parser.add_argument('--clahe-grid', type=int, default=8, help='CLAHE grid size (default: 8)')
     
     args = parser.parse_args()
     
@@ -105,8 +96,12 @@ def main():
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not is_camera else 0
+    duration_sec = total_frames / fps if fps > 0 and total_frames > 0 else 0
     
     logger.info(f"Video properties: {width}x{height} @ {fps} fps")
+    if total_frames > 0:
+        logger.info(f"Total frames: {total_frames}, Duration: {duration_sec:.1f}s")
     
     # Initialize detector
     # Enable motion mode for video files
@@ -116,24 +111,11 @@ def main():
         height=height,
         num_bots=args.markers,
         debug=args.debug,
-        motion_mode=motion_mode,
-        use_clahe=args.use_clahe,
-        clahe_clip=args.clahe_clip,
-        clahe_grid=args.clahe_grid,
-        temporal_smooth=args.temporal_smooth,
-        smooth_frames=args.smooth_frames,
-        smooth_weight=args.smooth_weight,
-        crop_border=args.crop_border
+        motion_mode=motion_mode
     )
     
     # Log preprocessing settings
     preproc_info = []
-    if args.crop_border > 0:
-        preproc_info.append(f"crop={args.crop_border}px")
-    if args.use_clahe:
-        preproc_info.append(f"CLAHE(clip={args.clahe_clip}, grid={args.clahe_grid})")
-    if args.temporal_smooth:
-        preproc_info.append(f"temporal_smooth(frames={args.smooth_frames}, weight={args.smooth_weight})")
     if motion_mode:
         preproc_info.append("motion_mode")
     
@@ -222,11 +204,13 @@ def main():
             trajectories = {}
             track_id_map = {}
             predictions = {}
+            lost_status = {}
             
             if tracker:
                 timestamp_sec = frame_count / fps if fps > 0 else frame_count / 30.0
                 tracked_results = tracker.update(segments, timestamp_sec)
                 trajectories = tracker.get_trajectories()
+                lost_status = tracker.get_lost_status()
                 
                 # Get predictions if enabled
                 if args.show_prediction or args.show_prediction_error:
@@ -251,10 +235,40 @@ def main():
                         predictions=predictions if args.show_prediction else None,
                         show_prediction=args.show_prediction,
                         previous_predictions=previous_predictions if args.show_prediction_error else None,
-                        show_prediction_error=args.show_prediction_error
+                        show_prediction_error=args.show_prediction_error,
+                        lost_status=lost_status if tracker else None
                     )
                 
                 if args.show and display_frame is not None:
+                    # Draw progress bar for video files
+                    if not is_camera and total_frames > 0:
+                        progress = frame_count / total_frames
+                        current_time = frame_count / fps if fps > 0 else 0
+                        total_time = duration_sec
+                        
+                        # Progress bar dimensions
+                        bar_height = 6
+                        bar_y = height - bar_height - 5
+                        bar_width = width - 20
+                        bar_x = 10
+                        
+                        # Draw background bar (dark gray)
+                        cv2.rectangle(display_frame, (bar_x, bar_y), 
+                                     (bar_x + bar_width, bar_y + bar_height), 
+                                     (50, 50, 50), -1)
+                        
+                        # Draw progress bar (green)
+                        filled_width = int(bar_width * progress)
+                        cv2.rectangle(display_frame, (bar_x, bar_y), 
+                                     (bar_x + filled_width, bar_y + bar_height), 
+                                     (0, 200, 0), -1)
+                        
+                        # Draw time text
+                        time_text = f"{int(current_time//60):02d}:{int(current_time%60):02d} / {int(total_time//60):02d}:{int(total_time%60):02d}  ({progress*100:.1f}%)"
+                        cv2.putText(display_frame, time_text,
+                                   (bar_x, bar_y - 8),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    
                     cv2.imshow('WhyConID Detection', display_frame)
                     key = cv2.waitKey(1 if is_camera else 30)
                     if key == ord('q') or key == 27:  # 'q' or ESC

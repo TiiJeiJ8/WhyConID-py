@@ -32,6 +32,8 @@ class LostTrack:
     marker_id: Optional[int]
     frames_since_lost: int = 0
     hits: int = 0  # Remember hits count for faster reactivation
+    last_velocity: Tuple[float, float] = (0.0, 0.0)  # Last known velocity (vx, vy)
+    predicted_position: Optional[Tuple[float, float]] = None  # Kalman prediction at loss time
     
 
 class MarkerTracker:
@@ -232,7 +234,13 @@ class MarkerTracker:
     
     def _try_recover_track(self, segment: Segment) -> Optional[int]:
         """
-        Try to match new detection to a recently lost track.
+        Try to match new detection to a recently lost track using multi-feature matching.
+        
+        Matching features:
+        1. Position distance (基础距离)
+        2. Velocity direction consistency (速度方向一致性)
+        3. Kalman prediction confidence (预测置信度)
+        4. Marker ID if available (外观ID)
         
         Args:
             segment: New detection
@@ -244,24 +252,90 @@ class MarkerTracker:
             return None
         
         best_match_id = None
-        best_distance = self.max_distance * 2  # Allow larger distance for recovery
+        best_score = 0.0  # Higher score = better match
         
         for lost in self.lost_tracks:
-            # Calculate distance to last known position
-            dist = np.sqrt((segment.x - lost.last_position[0])**2 +
-                            (segment.y - lost.last_position[1])**2)
+            # Skip if lost too long ago
+            if lost.frames_since_lost > self.memory_frames // 2:  # Half of memory window
+                continue
             
-            # Prefer matching by marker ID if available
+            # Feature 1: Position distance
+            # Use predicted position if available, otherwise last known position
+            reference_pos = lost.predicted_position if lost.predicted_position else lost.last_position
+            
+            # Extrapolate position based on velocity and time lost
+            extrapolated_x = lost.last_position[0] + lost.last_velocity[0] * lost.frames_since_lost
+            extrapolated_y = lost.last_position[1] + lost.last_velocity[1] * lost.frames_since_lost
+            
+            # Distance to extrapolated position
+            dist_extrap = np.sqrt((segment.x - extrapolated_x)**2 + (segment.y - extrapolated_y)**2)
+            # Distance to last known position
+            dist_last = np.sqrt((segment.x - lost.last_position[0])**2 + 
+                               (segment.y - lost.last_position[1])**2)
+            
+            # Use minimum of both distances (more forgiving)
+            dist = min(dist_extrap, dist_last)
+            
+            # Reject if too far even for recovery
+            max_recovery_distance = self.max_distance * 3.0  # Allow 3x normal distance
+            if dist > max_recovery_distance:
+                continue
+            
+            # Distance score (closer = higher score, normalized to 0-1)
+            # Score decays exponentially with distance
+            distance_score = np.exp(-dist / self.max_distance)
+            
+            # Feature 2: Velocity direction consistency
+            velocity_score = 0.0
+            speed = np.sqrt(lost.last_velocity[0]**2 + lost.last_velocity[1]**2)
+            if speed > 1.0:  # Only if object was moving
+                # Calculate direction from last position to new detection
+                dx = segment.x - lost.last_position[0]
+                dy = segment.y - lost.last_position[1]
+                new_speed = np.sqrt(dx**2 + dy**2) / max(lost.frames_since_lost, 1)
+                
+                if new_speed > 0.1:
+                    # Normalize velocity vectors
+                    vx_norm = lost.last_velocity[0] / speed
+                    vy_norm = lost.last_velocity[1] / speed
+                    dx_norm = dx / (new_speed * max(lost.frames_since_lost, 1))
+                    dy_norm = dy / (new_speed * max(lost.frames_since_lost, 1))
+                    
+                    # Dot product (cosine similarity) of direction vectors
+                    direction_similarity = vx_norm * dx_norm + vy_norm * dy_norm
+                    # Map from [-1, 1] to [0, 1], with 1 = same direction
+                    velocity_score = (direction_similarity + 1.0) / 2.0
+            
+            # Feature 3: Kalman prediction confidence
+            # Score based on how recently the track was lost (fresher = more confident)
+            freshness_score = 1.0 - (lost.frames_since_lost / (self.memory_frames // 2))
+            freshness_score = max(0.0, freshness_score)  # Clamp to [0, 1]
+            
+            # Feature 4: Marker ID match (if available)
+            id_match_bonus = 0.0
             if hasattr(segment, 'ID') and segment.ID >= 0 and lost.marker_id is not None:
-                if segment.ID == lost.marker_id and dist < best_distance:
-                    best_match_id = lost.track_id
-                    best_distance = dist
-            # Otherwise match by proximity
-            elif dist < best_distance and lost.frames_since_lost < 60:  # Only recent losses
+                if segment.ID == lost.marker_id:
+                    id_match_bonus = 1.0  # Strong bonus for ID match
+            
+            # Combined score (weighted sum)
+            # Weights: distance=0.4, velocity=0.2, freshness=0.2, id=0.2
+            score = (0.4 * distance_score + 
+                    0.2 * velocity_score + 
+                    0.2 * freshness_score + 
+                    0.2 * id_match_bonus)
+            
+            # Boost score if ID matches
+            if id_match_bonus > 0:
+                score *= 1.5  # 50% boost for ID match
+            
+            # Update best match
+            if score > best_score:
                 best_match_id = lost.track_id
-                best_distance = dist
+                best_score = score
         
-        if best_match_id is not None:
+        # Only accept match if score is above threshold
+        score_threshold = 0.3  # Minimum confidence required
+        if best_match_id is not None and best_score >= score_threshold:
             # Remove from lost tracks
             self.lost_tracks = [lt for lt in self.lost_tracks if lt.track_id != best_match_id]
             return best_match_id
@@ -301,12 +375,20 @@ class MarkerTracker:
     def _save_lost_track(self, track_id: int, track: TrackedMarker):
         """Save track to memory when it's lost."""
         if track.last_position:
+            # Extract velocity from Kalman state if available
+            vx, vy = 0.0, 0.0
+            if track.kalman.initialized and len(track.kalman.state) >= 4:
+                vx = track.kalman.state[2]
+                vy = track.kalman.state[3]
+            
             lost = LostTrack(
                 track_id=track_id,
                 last_position=track.last_position,
                 marker_id=track.marker_id,
                 frames_since_lost=0,
-                hits=track.hits  # Save hits count for recovery
+                hits=track.hits,
+                last_velocity=(vx, vy),
+                predicted_position=track.predicted_position
             )
             self.lost_tracks.append(lost)
     
@@ -340,6 +422,19 @@ class MarkerTracker:
                 if future_positions:
                     predictions[track_id] = future_positions
         return predictions
+    
+    def get_lost_status(self) -> Dict[int, bool]:
+        """
+        Get lost/tracking status for all confirmed tracks.
+        
+        Returns:
+            Dict mapping track_id to is_lost (True if lost/predicting, False if actively detected)
+        """
+        lost_status = {}
+        for track_id, track in self.tracks.items():
+            if track.hits >= self.min_hits:  # Only for confirmed tracks
+                lost_status[track_id] = (track.age > 0)  # Lost if age > 0
+        return lost_status
     
     def get_full_trajectories(self) -> Dict[int, List[Tuple[int, float, float, float, float, float]]]:
         """
