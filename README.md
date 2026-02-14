@@ -16,8 +16,22 @@ Python 复现与扩展版的 WhyConID——圆形/环形标记检测、ID 生成
 - `Necklace` 风格 ID 生成与解码
 - 多目标卡尔曼跟踪（ID 恢复、持久轨迹、彩色轨迹）
 - 轨迹预测（单步箭头、多步虚线、预测误差可视化）
+- **单目 3D 定位**（深度估计、世界坐标系转换、交互式 3D 可视化）
+- 预处理增强（时序平滑、CLAHE 对比度增强、边界裁剪）
 - 命令行处理（图像/视频/摄像头）与可视化输出
 - 可选 API 服务：图像/视频上传、结果返回、标注视频与轨迹下载
+
+### 3D 定位能力
+
+基于针孔相机模型，从标记尺寸估计深度并转换到世界坐标系：
+
+- **深度估计**：通过已知标记直径计算距离 (Z = f × D_real / D_pixel)
+- **相机外参**：支持任意相机位置和姿态（平移 + 旋转）
+- **坐标转换**：从像素坐标恢复到世界坐标系 (X, Y, Z)
+- **3D可视化**：导出交互式 HTML 轨迹图（Plotly）和高清静态图（Matplotlib）
+- **地面投影**：计算标记在地平面（Z=0）的投影位置
+
+适用场景：机器人导航、多相机融合、运动分析、高度测量
 
 快速开始
 
@@ -40,8 +54,14 @@ pip install -r requirements.txt
 3) 使用命令行处理（示例：检测视频并显示实时窗口）
 
 ```bash
-# 处理视频并显示（带轨迹和预测）
+# 基础检测：处理视频并显示（带轨迹和预测）
 python core/main.py TEST/test_double_colias.mp4 --track --show --show-prediction --prediction-steps 5 --persistent-trajectory --color-trajectory --output result.mp4
+
+# 3D定位：深度估计 + 世界坐标转换 + 3D可视化
+python core/main.py TEST/test_double_colias.mp4 \
+    --track --enable-depth --marker-diameter 50 --fov 60 \
+    --camera-position 0.3 0.2 1.5 --camera-rotation 0 45 0 \
+    --export-3d --save-trajectory --output 3d_tracked.mp4
 ```
 
 4) 启动 API 服务（可选）
@@ -69,6 +89,12 @@ npm run build     # 生产构建，构建结果放到 web/dist
 
 - 在 `api/server.py`启动时使用 `--mode full`或 `--serve-frontend`，服务会尝试挂载 `web/dist` 目录作为静态站点。
 
+## 📚 文档
+
+- **[USAGE.md](core/USAGE.md)** - 完整的命令行参数说明与使用示例
+- **[3D_LOCALIZATION.md](docs/instruction/3D_LOCALIZATION.md)** - 单目3D定位的数学推导与算法原理
+- **[ALGORITHM_DOCUMENTATION.md](docs/instruction/ALGORITHM_DOCUMENTATION.md)** - 核心算法理论与实现细节
+
 工程结构（摘要）
 
 ```
@@ -92,6 +118,19 @@ python core/main.py test.jpg --show
 
 # 批量处理视频并保存标注视频
 python core/main.py input.mp4 --track --output annotated.mp4
+
+# 3D定位追踪（基础深度估计）
+python core/main.py video.mp4 --track --enable-depth --marker-diameter 50 --fov 60 --export-3d --output 3d.mp4
+
+# 完整3D配置（相机外参 + 世界坐标）
+python core/main.py video.mp4 \
+    --track --enable-depth --marker-diameter 50 --focal-length 850 \
+    --camera-position 0.3 0.2 1.5 --camera-rotation 0 45 0 \
+    --export-3d --save-trajectory --persistent-trajectory --color-trajectory \
+    --output 3d_full.mp4
+
+# 预处理增强（光照不稳定场景）
+python core/main.py video.mp4 --track --temporal-smooth --use-clahe --crop-border 20 --output enhanced.mp4
 
 # 启动 API 服务（开发）
 cd api
