@@ -62,7 +62,8 @@ class DetectionVisualizer:
                         show_prediction: bool = False,
                         previous_predictions: Optional[Dict] = None,
                         show_prediction_error: bool = False,
-                        lost_status: Optional[Dict[int, bool]] = None) -> np.ndarray:
+                        lost_status: Optional[Dict[int, bool]] = None,
+                        tracker = None) -> np.ndarray:
         """
         Draw detection results on image.
         
@@ -80,6 +81,7 @@ class DetectionVisualizer:
             previous_predictions: Dict of track_id -> list of previously predicted positions
             show_prediction_error: Whether to show prediction error visualization
             lost_status: Dict mapping track_id to is_lost (True if lost, False if tracking)
+            tracker: MarkerTracker instance for accessing 3D position data (optional)
             
         Returns:
             Annotated image
@@ -381,6 +383,17 @@ class DetectionVisualizer:
                     f"Round: {seg.roundness:.2f}",
                     f"Area: {seg.size}"
                 ]
+                
+                # Add depth and 3D position if available
+                if tracker and track_ids and i in track_ids:
+                    track_id = track_ids[i]
+                    if track_id in tracker.tracks:
+                        track = tracker.tracks[track_id]
+                        if track.depth is not None:
+                            info_lines.append(f"Depth: {track.depth:.2f}m")
+                        if track.position_3d is not None:
+                            x3d, y3d, z3d = track.position_3d
+                            info_lines.append(f"3D: ({x3d:.2f}, {y3d:.2f}, {z3d:.2f})m")
                 
                 y_offset = label_pos[1] + 20
                 for line in info_lines:

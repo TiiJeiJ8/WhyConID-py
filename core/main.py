@@ -50,6 +50,28 @@ def main():
     parser.add_argument('--min-hits', type=int, default=8, help='Minimum detections before track is confirmed (default: 8)')
     parser.add_argument('--memory-frames', type=int, default=500, help='Frames to remember lost tracks for ID recovery (default: 500)')
     
+    # Detection preprocessing parameters
+    parser.add_argument('--temporal-smooth', action='store_true', help='Enable temporal smoothing (average recent frames)')
+    parser.add_argument('--smooth-frames', type=int, default=3, help='Number of frames for temporal smoothing (default: 3)')
+    parser.add_argument('--smooth-weight', type=float, default=0.6, help='Weight for current frame in smoothing (0-1, default: 0.6)')
+    parser.add_argument('--crop-border', type=int, default=0, help='Crop N pixels from border to remove black edges (default: 0)')
+    parser.add_argument('--use-clahe', action='store_true', help='Enable CLAHE (Contrast Limited Adaptive Histogram Equalization)')
+    parser.add_argument('--clahe-clip', type=float, default=2.0, help='CLAHE clip limit (default: 2.0)')
+    parser.add_argument('--clahe-grid', type=int, default=8, help='CLAHE grid size (default: 8)')
+    
+    # Depth estimation parameters (3D positioning)
+    parser.add_argument('--enable-depth', action='store_true', help='Enable depth estimation from marker size')
+    parser.add_argument('--focal-length', type=float, help='Focal length in pixels (for depth estimation)')
+    parser.add_argument('--fov', type=float, help='Horizontal field of view in degrees (alternative to focal length)')
+    parser.add_argument('--marker-diameter', type=float, default=50.0, help='Real-world marker diameter in mm (default: 50.0)')
+    
+    # Camera extrinsic parameters (world coordinates)
+    parser.add_argument('--camera-position', type=float, nargs=3, metavar=('X', 'Y', 'Z'),
+                       help='Camera position in world frame (X Y Z in meters)')
+    parser.add_argument('--camera-rotation', type=float, nargs=3, metavar=('ROLL', 'PITCH', 'YAW'),
+                       help='Camera rotation in degrees (roll pitch yaw)')
+    parser.add_argument('--export-3d', action='store_true', help='Export 3D trajectory visualization (HTML + PNG)')
+    
     args = parser.parse_args()
     
     # Create timestamped output directory for this run
@@ -111,11 +133,24 @@ def main():
         height=height,
         num_bots=args.markers,
         debug=args.debug,
-        motion_mode=motion_mode
+        motion_mode=motion_mode,
+        use_clahe=args.use_clahe if hasattr(args, 'use_clahe') else False,
+        clahe_clip=args.clahe_clip if hasattr(args, 'clahe_clip') else 2.0,
+        clahe_grid=args.clahe_grid if hasattr(args, 'clahe_grid') else 8,
+        temporal_smooth=args.temporal_smooth if hasattr(args, 'temporal_smooth') else False,
+        smooth_frames=args.smooth_frames if hasattr(args, 'smooth_frames') else 3,
+        smooth_weight=args.smooth_weight if hasattr(args, 'smooth_weight') else 0.6,
+        crop_border=args.crop_border if hasattr(args, 'crop_border') else 0
     )
     
     # Log preprocessing settings
     preproc_info = []
+    if hasattr(args, 'crop_border') and args.crop_border > 0:
+        preproc_info.append(f"crop={args.crop_border}px")
+    if hasattr(args, 'use_clahe') and args.use_clahe:
+        preproc_info.append(f"CLAHE(clip={args.clahe_clip}, grid={args.clahe_grid})")
+    if hasattr(args, 'temporal_smooth') and args.temporal_smooth:
+        preproc_info.append(f"temporal_smooth(frames={args.smooth_frames}, weight={args.smooth_weight})")
     if motion_mode:
         preproc_info.append("motion_mode")
     
@@ -127,6 +162,44 @@ def main():
     # Initialize necklace decoder
     necklace = CNecklace(bits=config.marker.necklace_bits)
     logger.info(f"Initialized necklace decoder: {necklace}")
+    
+    # Initialize depth estimator if enabled
+    depth_estimator = None
+    camera_transform = None
+    
+    if args.enable_depth:
+        from utils.depth_estimation import DepthEstimator
+        from utils.camera_transform import CameraTransform
+        
+        # Initialize camera transform if extrinsic parameters provided
+        if args.camera_position is not None or args.camera_rotation is not None:
+            cam_pos = tuple(args.camera_position) if args.camera_position else (0.0, 0.0, 1.5)
+            cam_rot = tuple(args.camera_rotation) if args.camera_rotation else (0.0, 45.0, 0.0)
+            camera_transform = CameraTransform(position=cam_pos, rotation=cam_rot)
+            logger.info(f"Camera extrinsic params: pos={cam_pos}, rot={cam_rot}")
+        
+        if args.focal_length:
+            depth_estimator = DepthEstimator(
+                focal_length_px=args.focal_length,
+                marker_diameter_mm=args.marker_diameter,
+                camera_transform=camera_transform
+            )
+        elif args.fov:
+            depth_estimator = DepthEstimator(
+                fov_horizontal_deg=args.fov,
+                image_width_px=width,
+                marker_diameter_mm=args.marker_diameter,
+                camera_transform=camera_transform
+            )
+        else:
+            # Use default estimate
+            depth_estimator = DepthEstimator(
+                fov_horizontal_deg=60.0,  # Typical webcam
+                image_width_px=width,
+                marker_diameter_mm=args.marker_diameter,
+                camera_transform=camera_transform
+            )
+        logger.info(f"Depth estimation enabled (marker={args.marker_diameter}mm)")
     
     # Initialize visualizer with run-specific output directory
     # Need visualizer if saving images, showing, OR outputting video
@@ -148,7 +221,10 @@ def main():
             max_age=args.max_age,
             min_hits=args.min_hits,
             trajectory_length=traj_length,
-            memory_frames=args.memory_frames
+            memory_frames=args.memory_frames,
+            depth_estimator=depth_estimator,
+            image_width=width,
+            image_height=height
         )
         mode_info = f"Trajectory tracking enabled (match≤{args.match_threshold}px, age≤{args.max_age}, hits≥{args.min_hits}, memory={args.memory_frames}f)"
         if args.persistent_trajectory:
@@ -236,7 +312,8 @@ def main():
                         show_prediction=args.show_prediction,
                         previous_predictions=previous_predictions if args.show_prediction_error else None,
                         show_prediction_error=args.show_prediction_error,
-                        lost_status=lost_status if tracker else None
+                        lost_status=lost_status if tracker else None,
+                        tracker=tracker
                     )
                 
                 if args.show and display_frame is not None:
@@ -340,6 +417,26 @@ def main():
                 for track_id, traj in full_trajs.items():
                     logger.info(f"  Track {track_id}: {len(traj)} frames")
             
+            # Export 3D visualization if enabled
+            if args.export_3d and tracker and depth_estimator:
+                world_trajectories = tracker.get_world_trajectories()
+                if world_trajectories:
+                    from utils.trajectory_3d_viz import export_trajectories_3d_html, export_trajectories_3d_matplotlib
+                    
+                    # HTML interactive visualization
+                    html_path = run_output_dir / "trajectory_3d.html"
+                    export_trajectories_3d_html(world_trajectories, str(html_path), 
+                                               title="3D Trajectory - World Coordinates")
+                    
+                    # Static image export
+                    png_path = run_output_dir / "trajectory_3d.png"
+                    export_trajectories_3d_matplotlib(world_trajectories, str(png_path),
+                                                     title="3D Trajectory - World Coordinates")
+                    
+                    logger.info(f"3D visualizations exported: {html_path.name}, {png_path.name}")
+                else:
+                    logger.warning("No 3D trajectories available for visualization")
+            
             # Create summary file
             if args.save_log or args.save_csv or args.save_img or args.output:
                 summary_path = run_output_dir / "run_summary.txt"
@@ -363,6 +460,9 @@ def main():
                         f.write(f"  - detection_results.csv (CSV export)\n")
                     if args.save_trajectory and tracker:
                         f.write(f"  - trajectories.csv (trajectory data)\n")
+                    if args.export_3d and tracker and depth_estimator:
+                        f.write(f"  - trajectory_3d.html (interactive 3D visualization)\n")
+                        f.write(f"  - trajectory_3d.png (static 3D visualization)\n")
                         f.write(f"\nTracking Statistics:\n")
                         full_trajs = tracker.get_full_trajectories()
                         f.write(f"  Total tracks: {len(full_trajs)}\n")

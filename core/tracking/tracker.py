@@ -15,13 +15,18 @@ class TrackedMarker:
     """A tracked marker with history and prediction."""
     id: int
     kalman: KalmanFilter2D
-    trajectory: deque  # Recent positions
+    trajectory: deque  # Recent positions (2D)
     age: int = 0  # Frames since last detection
     hits: int = 0  # Total successful detections
     misses: int = 0  # Consecutive missed detections
-    last_position: Optional[Tuple[float, float]] = None
+    last_position: Optional[Tuple[float, float]] = None  # 2D position
     predicted_position: Optional[Tuple[float, float]] = None
     marker_id: Optional[int] = None  # Necklace ID from detection (if available)
+    depth: Optional[float] = None  # Depth in meters (Z-axis)
+    position_3d: Optional[Tuple[float, float, float]] = None  # (X, Y, Z) in camera coords
+    trajectory_3d: Optional[list] = None  # 3D trajectory history (camera coords)
+    position_world: Optional[Tuple[float, float, float]] = None  # (X, Y, Z) in world coords
+    trajectory_world: Optional[list] = None  # 3D trajectory history (world coords)
 
 
 @dataclass
@@ -46,7 +51,10 @@ class MarkerTracker:
                     max_age: int = 60,
                     min_hits: int = 5,
                     trajectory_length: int = 50,
-                    memory_frames: int = 300):
+                    memory_frames: int = 300,
+                    depth_estimator = None,
+                    image_width: int = 640,
+                    image_height: int = 480):
         """
         Initialize marker tracker.
         
@@ -56,6 +64,9 @@ class MarkerTracker:
             min_hits: Minimum detections before track is confirmed (increased to reduce noise)
             trajectory_length: Number of positions to keep in trajectory (None for unlimited)
             memory_frames: Frames to remember lost tracks for ID recovery
+            depth_estimator: DepthEstimator instance for 3D position calculation (optional)
+            image_width: Image width in pixels (for 3D projection)
+            image_height: Image height in pixels (for 3D projection)
         """
         self.max_distance = max_distance
         self.max_age = max_age
@@ -63,6 +74,9 @@ class MarkerTracker:
         self.trajectory_length = trajectory_length
         self.memory_frames = memory_frames
         self.persistent_mode = (trajectory_length is None)
+        self.depth_estimator = depth_estimator
+        self.image_width = image_width
+        self.image_height = image_height
         
         self.tracks: Dict[int, TrackedMarker] = {}
         self.lost_tracks: List[LostTrack] = []  # Memory of recently lost tracks
@@ -111,6 +125,38 @@ class MarkerTracker:
             track.age = 0
             track.hits += 1
             track.misses = 0
+            
+            # Calculate depth and 3D position if depth estimator available
+            if self.depth_estimator is not None:
+                depth = self.depth_estimator.estimate_depth(segment)
+                pos_3d = self.depth_estimator.estimate_3d_position(
+                    segment, self.image_width, self.image_height
+                )
+                pos_world = self.depth_estimator.estimate_world_position(
+                    segment, self.image_width, self.image_height
+                )
+                
+                track.depth = depth
+                track.position_3d = pos_3d
+                track.position_world = pos_world
+                
+                # Update 3D trajectory (camera coords)
+                if track.trajectory_3d is None:
+                    track.trajectory_3d = []
+                if pos_3d is not None:
+                    track.trajectory_3d.append(pos_3d)
+                    # Limit 3D trajectory length to match 2D
+                    if not self.persistent_mode and len(track.trajectory_3d) > self.trajectory_length:
+                        track.trajectory_3d.pop(0)
+                
+                # Update 3D trajectory (world coords)
+                if track.trajectory_world is None:
+                    track.trajectory_world = []
+                if pos_world is not None:
+                    track.trajectory_world.append(pos_world)
+                    # Limit world trajectory length to match 2D
+                    if not self.persistent_mode and len(track.trajectory_world) > self.trajectory_length:
+                        track.trajectory_world.pop(0)
             
             # Store in full trajectory history
             if track_id not in self.full_trajectories:
@@ -435,6 +481,19 @@ class MarkerTracker:
             if track.hits >= self.min_hits:  # Only for confirmed tracks
                 lost_status[track_id] = (track.age > 0)  # Lost if age > 0
         return lost_status
+    
+    def get_world_trajectories(self) -> Dict[int, List[Tuple[float, float, float]]]:
+        """
+        Get 3D trajectories in world coordinates for confirmed tracks.
+        
+        Returns:
+            Dict mapping track_id to list of (X, Y, Z) world positions
+        """
+        world_trajectories = {}
+        for track_id, track in self.tracks.items():
+            if track.hits >= self.min_hits and track.trajectory_world:
+                world_trajectories[track_id] = track.trajectory_world.copy()
+        return world_trajectories
     
     def get_full_trajectories(self) -> Dict[int, List[Tuple[int, float, float, float, float, float]]]:
         """
