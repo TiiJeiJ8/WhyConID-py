@@ -1,25 +1,57 @@
-# Origin
+# Reference codebases kept outside version control
 WhyConID/
+hopfield_network/
 
-# Common
-.history
-.vscode
+# Local editor and history
+.history/
+.vscode/
 
-# python venv & cache
-__pycache__/
+# Python environments and caches
 .venv/
 env/
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+pytest-cache-files-*/
+core/pytest-cache-files-*/
 
-# output
+# Local tool cache
+.dotnet_cli/
+tools/
+
+# Web build artifacts
+web/node_modules/
+web/dist/
+
+# API cache
+api/__pycache__/
+
+# Common generated outputs
 output/
+tmp_analysis/
+tmp_analysis_video/
+temp_output/
 
-# docs
-docs/hide
+# Core generated outputs
+core/output/
+core/gui_runs/
+core/batch_runs/
+core/batch_smoke/
+core/smoke_assoc/
+core/smoke_recovery/
+core/smoke_stats/
+core/stage1_smoke/
+core/stage6_batches/
+core/stage7_batches/
+core/stage8_batches/
 
-# temporary folder
-api/
-web/
+# Local large test assets
 core/TEST/double-colias.mp4
 core/TEST/single-colias-2.mp4
 core/TEST/single-colias-1.mp4
 core/TEST/double-colias-motion.mp4
+core/TEST/short
+core/tests
+
+# Hidden docs
+docs/hide
